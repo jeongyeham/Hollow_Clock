@@ -6,7 +6,7 @@
  */
 
 #include "step_motor_task.h"
-#include "smart_config.h"
+#include "smart_config_task.h"
 
 char *TAG = "app_main";
 

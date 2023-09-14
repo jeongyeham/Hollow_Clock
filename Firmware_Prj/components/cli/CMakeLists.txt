@@ -1,3 +1,3 @@
-idf_component_register(	SRCS "cli.c"
-		       			INCLUDE_DIRS include
-		       			REQUIRES console)
+idf_component_register(SRCS "cli_task.c"
+        INCLUDE_DIRS include
+        REQUIRES console)
