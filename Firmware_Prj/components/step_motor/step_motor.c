@@ -8,8 +8,6 @@
 #include "driver/gptimer.h"
 #include "driver/dedic_gpio.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/queue.h"
 #include "esp_log.h"
 #include <stdint.h>
 
@@ -19,7 +17,7 @@
 static const uint8_t code_octa_phase[8] = {0x08, 0x0C, 0x04, 0x06, 0x02, 0x03, 0x01, 0x09};
 
 static volatile int step_index = 0;
-static volatile int remaining_steps = 0;
+volatile int remaining_steps = 0;
 static volatile bool direction_cw = true;
 
 static gptimer_handle_t gptimer = NULL;
@@ -34,12 +32,12 @@ static bool IRAM_ATTR gptimer_on_alarm_cb(gptimer_handle_t timer, const gptimer_
     if (remaining_steps <= 0)
     {
         gptimer_stop(timer);
-        dedic_gpio_bundle_write(dedic_gpio_bundle_handle, 0x1111, 0x00);
+        dedic_gpio_bundle_write(dedic_gpio_bundle_handle, 0b1111, 0x00);
         return false;
     }
 
     uint8_t phase = code_octa_phase[step_index & 0x07];
-    dedic_gpio_bundle_write(dedic_gpio_bundle_handle, 0x1111, phase);
+    dedic_gpio_bundle_write(dedic_gpio_bundle_handle, 0b1111, phase);
 
     step_index += direction_cw ? 1 : -1;
     if (step_index < 0) step_index = 7;
@@ -92,7 +90,7 @@ void stepper_driver_init(void)
     gptimer_event_callbacks_t cbs = {
         .on_alarm = gptimer_on_alarm_cb,
     };
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, NULL));
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, &dedic_gpio_bundle_handle));
     ESP_ERROR_CHECK(gptimer_enable(gptimer));
 }
 

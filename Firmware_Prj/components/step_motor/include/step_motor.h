@@ -18,7 +18,6 @@ typedef struct stepper_cmd
 
 
 void stepper_driver_init(void);
-void step_motor_task(void* param);
 void stepper_rotate_angle(float degree, bool cw, int rpm);
 void stepper_set_motion(int steps, bool dir, int speed_us);
 
