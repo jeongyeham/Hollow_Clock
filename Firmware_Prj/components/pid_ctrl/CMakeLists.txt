@@ -1,2 +1,2 @@
-idf_component_register(SRCS "src/pid_ctrl.c" "pid_ctrl_task.c"
+idf_component_register(SRCS "pid_ctrl.c"
         INCLUDE_DIRS include)
