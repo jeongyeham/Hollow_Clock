@@ -1,12 +1,14 @@
-#include <esp_types.h>
 /*
  * SPDX-FileCopyrightText: 2010-2022 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: CC0-1.0
  */
 
-#include "step_motor_task.h"
-#include "smart_config_task.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "FreeRTOS_task.h"
+#include "main.h"
 
 char *TAG = "app_main";
 

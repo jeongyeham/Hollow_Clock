@@ -20,41 +20,17 @@ extern "C"
 {
 #endif
 
-#include "stdio.h"
-#include <string.h>
-#include <stdlib.h>
-#include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
-#include "freertos/task.h"
-#include "freertos/queue.h"
-#include "freertos/semphr.h"
-#include "esp_log.h"
-#include <sys/param.h>
-#include "esp_sntp.h"
-#include "time.h"
-#include "esp_wifi.h"
-#include "esp_wpa2.h"
-#include "esp_event.h"
-#include "esp_system.h"
-#include "nvs_flash.h"
-#include "esp_netif.h"
-#include "esp_smartconfig.h"
 
-
-
-    typedef struct
+typedef struct
     {
         EventGroupHandle_t all_event;
-
     } user_data_t;
 
 /* The event group allows multiple bits for each event,
    but we only care about one event - are we connected
    to the AP with an IP? */
-#define CONNECTED_BIT      BIT0
-#define ESPTOUCH_DONE_BIT  BIT1
-#define ESP_NVS_STORED_BIT BIT2
-#define NTP_READY_BIT      BIT4
+
 
 #ifdef __cplusplus
 }
