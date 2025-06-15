@@ -1,38 +1,38 @@
 /*
-* SPDX-FileCopyrightText: Copyright 2025 JeongYeham
+ * SPDX-FileCopyrightText: Copyright 2025 JeongYeham
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/task.h"
 #include "main.h"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#include "step_motor.h"
 #include "esp_log.h"
+#include "esp_sntp.h"
+#include "step_motor.h"
 
 #define MOTOR_TAG "STEP_MOTOR"
 
-#define STEPS_PER_REV 4096
-QueueHandle_t motor_cmd_queue;
-extern volatile int remaining_steps;
 
-void step_motor_task(void* param)
+void step_motor_task(void* pvParameters)
 {
     ESP_LOGI(MOTOR_TAG, "Stepper task started");
-    motor_cmd_queue = xQueueCreate(4, sizeof(stepper_cmd_t));
+    motor_control_t* motor_control = stepper_driver_init();
+    motor_control->motor_cmd_queue = xQueueCreate(4, sizeof(stepper_cmd_t));
     ESP_LOGI(MOTOR_TAG, "Stepper task queue is ready");
     while (1)
     {
-        stepper_cmd_t cmd;
-        if (xQueueReceive(motor_cmd_queue, &cmd, portMAX_DELAY))
-        {
-            ESP_LOGI(MOTOR_TAG, "New command: steps=%d, dir=%s, speed=%dus",
-                     cmd.steps, cmd.dir_cw ? "CW" : "CCW", cmd.speed_us);
-            stepper_set_motion(cmd.steps, cmd.dir_cw, cmd.speed_us);
 
-            while (remaining_steps > 0)
+        stepper_cmd_t cmd;
+        if unlikely (xQueueReceive(motor_control->motor_cmd_queue, &cmd, portMAX_DELAY))
+        {
+            ESP_LOGI(MOTOR_TAG, "New command: steps=%d, dir=%s, speed=%dus", cmd.steps, cmd.dir_cw ? "CW" : "CCW",
+                     cmd.speed_us);
+            stepper_set_motion(motor_control, cmd.steps, cmd.dir_cw, cmd.speed_us);
+
+            while (1)
             {
                 vTaskDelay(pdMS_TO_TICKS(1));
             }
@@ -40,28 +40,39 @@ void step_motor_task(void* param)
     }
 }
 
-void stepper_rotate_angle(float degree, bool cw, int rpm)
+void stepper_rotate_angle(motor_control_t* motor_control, float degree, bool cw, float rpm)
 {
-    int total_steps = (int)(degree / 360.0f * STEPS_PER_REV);
-    int us_per_step = (int)(60.0f * 1000000 / (rpm * STEPS_PER_REV));
+    int total_steps = (int)(degree / 360.0f * 4096.0f);
+    int us_per_step = (int)(60.0f * 1000000 / (rpm * 4096.0f));
 
     stepper_cmd_t cmd = {
         .steps = total_steps,
         .dir_cw = cw,
         .speed_us = us_per_step,
     };
-    xQueueSend(motor_cmd_queue, &cmd, portMAX_DELAY);
+    xQueueSend(motor_control->motor_cmd_queue, &cmd, portMAX_DELAY);
+}
+
+
+void motor_control_task(void* pvParameters)
+{
+    stepper_rotate_angle(900, true, 10);
+    while (1)
+    {
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#include <time.h>
+#include "esp_smartconfig.h"
+#include "esp_wifi.h"
 #include "nvs.h"
 #include "nvs_flash.h"
-#include "esp_wifi.h"
-#include "esp_smartconfig.h"
 
-#define CONNECTED_BIT      BIT0
-#define ESP_TOUCH_DONE_BIT  BIT1
+#define CONNECTED_BIT BIT0
+#define ESP_TOUCH_DONE_BIT BIT1
 #define ESP_NVS_STORED_BIT BIT2
-#define NTP_READY_BIT      BIT4
+#define NTP_READY_BIT BIT4
 
 /*NVS_FLASH Configuration */
 static const char* NVS_Name_space = "wifi_data";
@@ -73,8 +84,7 @@ void smart_config_task(void* pvParameters);
 
 static const char* SMART_TAG = "smartconfig";
 
-static void event_handler(void* arg, esp_event_base_t event_base,
-                          int32_t event_id, void* event_data)
+static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
     user_data_t* signal = (user_data_t*)arg;
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
@@ -203,8 +213,8 @@ void smart_config_task(void* pvParameters)
     ESP_ERROR_CHECK(esp_smartconfig_start(&cfg));
     while (1)
     {
-        EventBits_t uxBits = xEventGroupWaitBits(user_signal->all_event, CONNECTED_BIT | ESP_TOUCH_DONE_BIT, true,
-                                                 false, portMAX_DELAY);
+        EventBits_t uxBits =
+            xEventGroupWaitBits(user_signal->all_event, CONNECTED_BIT | ESP_TOUCH_DONE_BIT, true, false, portMAX_DELAY);
         if (likely(uxBits & CONNECTED_BIT))
         {
             ESP_LOGI(SMART_TAG, "WiFi Connected to ap");
@@ -215,6 +225,15 @@ void smart_config_task(void* pvParameters)
             ESP_LOGI(SMART_TAG, "smart_config over");
             esp_smartconfig_stop();
             xEventGroupSetBits(user_signal->all_event, ESP_TOUCH_DONE_BIT);
+            ESP_LOGI("MAIN", "Network found, prepare to connect SNTP");
+            setenv("TZ", "EST-8", 1);
+            tzset();
+            sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);
+            esp_sntp_setservername(0, "ntp1.aliyun.com");
+            esp_sntp_setservername(1, "ntp2.aliyun.com");
+            esp_sntp_setservername(2, "ntp3.aliyun.com");
+            esp_sntp_init();
+            xEventGroupSetBits(user_signal->all_event, NTP_READY_BIT);
             break;
         }
     }
