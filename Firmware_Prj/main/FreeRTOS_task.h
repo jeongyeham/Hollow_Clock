@@ -5,8 +5,9 @@
 #define FREERTOS_TASK_H
 
 
-void step_motor_task(void *param);
+void step_motor_task(void *pvParameters);
 void initialise_wifi_task(void *pvParameters);
 void smartconfig_task(void *pvParameters);
+void motor_control_task(void *pvParameters);
 
 #endif //FREERTOS_TASK_H
