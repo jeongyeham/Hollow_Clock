@@ -52,3 +52,5 @@ Mkfile.old
 dkms.conf
 Firmware_Prj/build/
 Firmware_Prj/.idea/
+Firmware_Prj/.clang-format
+/Firmware_Prj/.run
