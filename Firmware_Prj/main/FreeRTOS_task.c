@@ -77,8 +77,6 @@ void stepper_rotate_angle(const motor_control_t* motor_control, float degree, bo
     xQueueSend(motor_control->motor_cmd_queue, &cmd, portMAX_DELAY);
 }
 
-// 删除重复的声明和错误的实现，因为该函数已经在step_motor.h中声明并定义
-
 // 将时间转换为角度的函数
 static float time_to_angle(int hour, int minute) 
 {

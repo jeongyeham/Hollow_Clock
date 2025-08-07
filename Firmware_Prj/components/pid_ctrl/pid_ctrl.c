@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: Copyright 2025 JeongYeham
  *
  * SPDX-License-Identifier: Apache-2.0
  */

@@ -3,6 +3,11 @@
  *
  * SPDX-License-Identifier: CC0-1.0
  */
+/*
+ * SPDX-FileCopyrightText: Copyright 2025 JeongYeham
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"

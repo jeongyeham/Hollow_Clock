@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: Copyright 2025 JeongYeham
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 //
 // Created by jeong on 2025/5/27.
 //
@@ -26,4 +31,4 @@ void clock_control_handler(clock_control_handle_t* handle);
 void set_clock_target_time(clock_control_handle_t* handle, int hour, int minute);
 clock_state_t get_clock_state(clock_control_handle_t* handle);
 
-#endif //FREERTOS_TASK_H
+#endif //FREERTOS_TASK_H
