@@ -38,12 +38,19 @@ typedef struct motor_control
     gptimer_handle_t motor_gptimer;
     void* motor_spinlock;
     QueueHandle_t motor_cmd_queue;
-     last_step_time;
 }motor_control_t;
 
 
 motor_control_t* stepper_driver_init(void);
-void stepper_rotate_angle(float degree, bool cw, float rpm);
-void stepper_set_motion(motor_control_t* motor_control, int steps, bool dir, int speed_us);
+void stepper_rotate_angle(const motor_control_t* motor_control, float degree, bool cw, float rpm);
+void stepper_set_time(motor_control_t* motor_control, int steps, bool dir, int speed_us);
+
+// 新增的接口函数
+int stepper_get_position(const motor_control_t* motor_control);
+void stepper_set_position(motor_control_t* motor_control, int position);
+bool stepper_is_moving(const motor_control_t* motor_control);
+void stepper_stop(motor_control_t* motor_control);
+void stepper_rotate_time(motor_control_t* motor_control, int duration_ms, bool dir_cw, int speed_us);
+void stepper_rotate_to_angle(motor_control_t* motor_control, float target_angle, float rpm);
 
 #endif
