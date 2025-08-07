@@ -77,6 +77,63 @@ void stepper_set_position(motor_control_t* motor_control, int position)
     ESP_LOGD(MOTOR_TAG, "Position set to %d", position);
 }
 
+/* 检查电机是否正在运动 */
+bool stepper_is_moving(const motor_control_t* motor_control)
+{
+    return motor_control->motion.executed_steps < motor_control->motion.total_steps;
+}
+
+/* 立即停止电机 */
+void stepper_stop(motor_control_t* motor_control)
+{
+    motor_control->motion.total_steps = motor_control->motion.executed_steps;
+    gptimer_stop(motor_control->motor_gptimer);
+    taskENTER_CRITICAL(motor_control->motor_spinlock);
+    dedic_gpio_bundle_write(motor_control->motor_dedic_gpio_bundle, 0x1111, 0x0000);
+    taskEXIT_CRITICAL(motor_control->motor_spinlock);
+    ESP_LOGD(MOTOR_TAG, "Motor stopped");
+}
+
+/* 按时间旋转电机（毫秒）*/
+void stepper_rotate_time(motor_control_t* motor_control, int duration_ms, bool dir_cw, int speed_us)
+{
+    if (speed_us < MIN_SPEED_US) speed_us = MIN_SPEED_US;
+    
+    // 计算在指定时间内要执行的步数
+    int total_steps = (1000 * duration_ms) / speed_us;
+    
+    stepper_cmd_t cmd = {
+        .steps = total_steps,
+        .dir_cw = dir_cw,
+        .speed_us = speed_us,
+    };
+    xQueueSend(motor_control->motor_cmd_queue, &cmd, portMAX_DELAY);
+}
+
+/* 旋转到特定角度 */
+void stepper_rotate_to_angle(motor_control_t* motor_control, float target_angle, float rpm)
+{
+    // 计算当前位置对应的角度
+    float current_angle = (float)(motor_control->motion.absolute_position % STEPS_PER_REV) * 360.0f / STEPS_PER_REV;
+    
+    // 计算需要旋转的角度差
+    float angle_diff = target_angle - current_angle;
+    
+    // 规范化角度差到 [-180, 180] 范围
+    if (angle_diff > 180.0f) {
+        angle_diff -= 360.0f;
+    } else if (angle_diff < -180.0f) {
+        angle_diff += 360.0f;
+    }
+    
+    // 确定旋转方向
+    bool dir_cw = angle_diff >= 0;
+    float abs_angle_diff = dir_cw ? angle_diff : -angle_diff;
+    
+    // 调用现有的角度旋转函数
+    stepper_rotate_angle(motor_control, abs_angle_diff, dir_cw, rpm);
+}
+
 /* 初始化驱动 */
 motor_control_t* stepper_driver_init(void)
 {
@@ -162,6 +219,7 @@ void stepper_driver_deinit(motor_control_t* motor_control)
     gptimer_disable(motor_control->motor_gptimer);
     gptimer_del_timer(motor_control->motor_gptimer);
 
+    free(motor_control->motor_spinlock);
     free(motor_control);
     ESP_LOGI(MOTOR_TAG, "Driver deinitialized");
 }
