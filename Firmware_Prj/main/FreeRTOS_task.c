@@ -7,6 +7,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "main.h"
+#include "FreeRTOS_task.h"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #include "esp_log.h"
@@ -14,33 +15,56 @@
 #include "step_motor.h"
 
 #define MOTOR_TAG "STEP_MOTOR"
+#define CLOCK_TAG  "CLOCK_TASK"
+
+// 前向声明
+void clock_control_task(void* pvParameters);
+static void update_clock_time(user_data_t* user_data);
+static float time_to_angle(int hour, int minute);
+static void feed_watchdog_if_needed(user_data_t* user_data);
+
+// 时钟控制处理函数 - 可以在管理任务空转时直接调用
+void clock_control_handler(clock_control_handle_t* handle);
+
+// 设置目标时间
+void set_clock_target_time(clock_control_handle_t* handle, int hour, int minute);
+
+// 获取时钟状态
+clock_state_t get_clock_state(clock_control_handle_t* handle);
+
+// 静态时钟控制句柄定义
+static clock_control_handle_t clock_handle = {0};
 
 
 void step_motor_task(void* pvParameters)
 {
+    user_data_t* signal = (user_data_t*)pvParameters;
     ESP_LOGI(MOTOR_TAG, "Stepper task started");
-    motor_control_t* motor_control = stepper_driver_init();
-    motor_control->motor_cmd_queue = xQueueCreate(4, sizeof(stepper_cmd_t));
+    signal->motor_control = stepper_driver_init();
+    signal->motor_control->motor_cmd_queue = xQueueCreate(4, sizeof(stepper_cmd_t));
     ESP_LOGI(MOTOR_TAG, "Stepper task queue is ready");
     while (1)
     {
 
         stepper_cmd_t cmd;
-        if unlikely (xQueueReceive(motor_control->motor_cmd_queue, &cmd, portMAX_DELAY))
+        if unlikely (xQueueReceive(signal->motor_control->motor_cmd_queue, &cmd, portMAX_DELAY))
         {
             ESP_LOGI(MOTOR_TAG, "New command: steps=%d, dir=%s, speed=%dus", cmd.steps, cmd.dir_cw ? "CW" : "CCW",
                      cmd.speed_us);
-            stepper_set_motion(motor_control, cmd.steps, cmd.dir_cw, cmd.speed_us);
+            stepper_set_time(signal->motor_control, cmd.steps, cmd.dir_cw, cmd.speed_us);
 
-            while (1)
+            while (stepper_is_moving(signal->motor_control))
             {
                 vTaskDelay(pdMS_TO_TICKS(1));
             }
+            
+            // 通知时钟任务电机运动完成
+            xEventGroupSetBits(signal->all_event, CLOCK_MOVE_COMPLETE_BIT);
         }
     }
 }
 
-void stepper_rotate_angle(motor_control_t* motor_control, float degree, bool cw, float rpm)
+void stepper_rotate_angle(const motor_control_t* motor_control, float degree, bool cw, float rpm)
 {
     int total_steps = (int)(degree / 360.0f * 4096.0f);
     int us_per_step = (int)(60.0f * 1000000 / (rpm * 4096.0f));
@@ -53,13 +77,236 @@ void stepper_rotate_angle(motor_control_t* motor_control, float degree, bool cw,
     xQueueSend(motor_control->motor_cmd_queue, &cmd, portMAX_DELAY);
 }
 
+// 删除重复的声明和错误的实现，因为该函数已经在step_motor.h中声明并定义
+
+// 将时间转换为角度的函数
+static float time_to_angle(int hour, int minute) 
+{
+    // 小时角度计算：每小时30度，每分钟0.5度
+    float hour_angle = (hour % 12) * 30.0f + minute * 0.5f;
+    return hour_angle;
+}
+
+// 更新时钟时间
+static void update_clock_time(user_data_t* user_data) 
+{
+    // 获取当前系统时间
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    
+    user_data->current_time.hour = timeinfo.tm_hour;
+    user_data->current_time.minute = timeinfo.tm_min;
+    user_data->current_time.second = timeinfo.tm_sec;
+    
+    ESP_LOGI(CLOCK_TAG, "Current time: %02d:%02d:%02d", 
+             user_data->current_time.hour, 
+             user_data->current_time.minute, 
+             user_data->current_time.second);
+}
+
+// 根据需要喂狗
+static void feed_watchdog_if_needed(user_data_t* user_data) 
+{
+    // 如果看门狗使能且时钟处于空闲状态，则执行喂狗操作
+    if (user_data->watchdog_enabled && user_data->clock_state == CLOCK_STATE_IDLE) {
+        ESP_LOGD(CLOCK_TAG, "Feeding watchdog...");
+        // 这里添加实际的喂狗代码
+        // 例如: esp_task_wdt_reset();
+    }
+}
+
+// 时钟控制任务
+void clock_control_task(void* pvParameters)
+{
+    user_data_t* user_data = (user_data_t*)pvParameters;
+    user_data->clock_state = CLOCK_STATE_IDLE;
+    user_data->watchdog_enabled = true; // 启用看门狗
+    
+    // 使用文件作用域静态句柄
+    if (!clock_handle.initialized) {
+        clock_handle.user_data = user_data;
+        clock_handle.initialized = true;
+    }
+    
+    // 初始化时间
+    update_clock_time(user_data);
+    
+    TickType_t last_minute_check = xTaskGetTickCount();
+    const TickType_t minute_check_interval = pdMS_TO_TICKS(1000); // 每秒检查一次时间
+    
+    while (1) {
+        // 检查是否需要更新时间（每分钟）
+        if (xTaskGetTickCount() - last_minute_check >= minute_check_interval) {
+            last_minute_check = xTaskGetTickCount();
+            
+            // 更新当前时间
+            clock_time_t old_time = user_data->current_time;
+            update_clock_time(user_data);
+            
+            // 检查分钟是否变化（分针跳动）
+            if (user_data->current_time.minute != old_time.minute || 
+                user_data->current_time.hour != old_time.hour) {
+                ESP_LOGI(CLOCK_TAG, "Minute changed, moving minute hand");
+                
+                // 计算需要旋转的角度
+                float target_angle = time_to_angle(user_data->current_time.hour, user_data->current_time.minute);
+                float current_angle = time_to_angle(old_time.hour, old_time.minute);
+                float angle_diff = target_angle - current_angle;
+                
+                // 规范化角度差到 [-180, 180] 范围
+                if (angle_diff > 180.0f) {
+                    angle_diff -= 360.0f;
+                } else if (angle_diff < -180.0f) {
+                    angle_diff += 360.0f;
+                }
+                
+                // 确定旋转方向
+                bool dir_cw = angle_diff >= 0;
+                float abs_angle_diff = dir_cw ? angle_diff : -angle_diff;
+                
+                ESP_LOGI(CLOCK_TAG, "Rotating minute hand by %.2f degrees %s", 
+                         abs_angle_diff, dir_cw ? "clockwise" : "counter-clockwise");
+                
+                // 设置状态为运动状态
+                user_data->clock_state = CLOCK_STATE_MOVING;
+                
+                // 发送旋转命令
+                stepper_rotate_angle(user_data->motor_control, abs_angle_diff, dir_cw, 6.0f); // 6 RPM速度
+                
+                // 等待运动完成
+                EventBits_t uxBits = xEventGroupWaitBits(user_data->all_event, 
+                                                         CLOCK_MOVE_COMPLETE_BIT, 
+                                                         pdTRUE, 
+                                                         pdFALSE, 
+                                                         portMAX_DELAY);
+                
+                if (uxBits & CLOCK_MOVE_COMPLETE_BIT) {
+                    ESP_LOGI(CLOCK_TAG, "Minute hand movement completed");
+                }
+                
+                // 恢复空闲状态
+                user_data->clock_state = CLOCK_STATE_IDLE;
+            }
+        }
+        
+        // 调用时钟控制处理函数
+        clock_control_handler(&clock_handle);
+        
+        // 短暂延迟以允许其他任务执行
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+// 时钟控制处理函数 - 可以在管理任务空转时直接调用
+void clock_control_handler(clock_control_handle_t* handle)
+{
+    if (!handle || !handle->initialized || !handle->user_data) {
+        return;
+    }
+    
+    user_data_t* user_data = handle->user_data;
+    
+    // 检查是否有时间调整请求
+    EventBits_t uxBits = xEventGroupGetBits(user_data->all_event);
+    if (uxBits & CLOCK_ADJUST_TIME_BIT) {
+        ESP_LOGI(CLOCK_TAG, "Time adjustment requested via handler");
+        xEventGroupClearBits(user_data->all_event, CLOCK_ADJUST_TIME_BIT);
+        
+        // 设置状态为调整状态
+        user_data->clock_state = CLOCK_STATE_ADJUSTING;
+        
+        // 计算目标角度和当前角度的差值
+        float target_angle = time_to_angle(user_data->target_time.hour, user_data->target_time.minute);
+        float current_angle = time_to_angle(user_data->current_time.hour, user_data->current_time.minute);
+        float angle_diff = target_angle - current_angle;
+        
+        // 规范化角度差到 [-180, 180] 范围
+        if (angle_diff > 180.0f) {
+            angle_diff -= 360.0f;
+        } else if (angle_diff < -180.0f) {
+            angle_diff += 360.0f;
+        }
+        
+        // 确定旋转方向
+        bool dir_cw = angle_diff >= 0;
+        float abs_angle_diff = dir_cw ? angle_diff : -angle_diff;
+        
+        ESP_LOGI(CLOCK_TAG, "Adjusting time: rotating by %.2f degrees %s", 
+                 abs_angle_diff, dir_cw ? "clockwise" : "counter-clockwise");
+        
+        // 发送旋转命令
+        stepper_rotate_angle(user_data->motor_control, abs_angle_diff, dir_cw, 10.0f); // 10 RPM速度
+        
+        // 等待运动完成
+        EventBits_t uxBits = xEventGroupWaitBits(user_data->all_event, 
+                                                 CLOCK_MOVE_COMPLETE_BIT, 
+                                                 pdTRUE, 
+                                                 pdFALSE, 
+                                                 portMAX_DELAY);
+        
+        if (uxBits & CLOCK_MOVE_COMPLETE_BIT) {
+            ESP_LOGI(CLOCK_TAG, "Time adjustment completed");
+            // 更新当前时间
+            user_data->current_time = user_data->target_time;
+        }
+        
+        // 恢复空闲状态
+        user_data->clock_state = CLOCK_STATE_IDLE;
+    }
+    
+    // 喂狗操作
+    feed_watchdog_if_needed(user_data);
+}
+
+// 设置目标时间
+void set_clock_target_time(clock_control_handle_t* handle, int hour, int minute)
+{
+    if (!handle || !handle->initialized || !handle->user_data) {
+        return;
+    }
+    
+    user_data_t* user_data = handle->user_data;
+    user_data->target_time.hour = hour;
+    user_data->target_time.minute = minute;
+    
+    // 触发时间调整事件
+    xEventGroupSetBits(user_data->all_event, CLOCK_ADJUST_TIME_BIT);
+}
+
+// 获取时钟状态
+clock_state_t get_clock_state(clock_control_handle_t* handle)
+{
+    if (!handle || !handle->initialized || !handle->user_data) {
+        return CLOCK_STATE_IDLE;
+    }
+    
+    return handle->user_data->clock_state;
+}
 
 void motor_control_task(void* pvParameters)
 {
-    stepper_rotate_angle(900, true, 10);
+    user_data_t* signal = (user_data_t*)pvParameters;
+    
+    // 示例：旋转90度，顺时针，10 RPM
+    stepper_rotate_angle(signal->motor_control, 90, true, 10);
+    vTaskDelay(pdMS_TO_TICKS(2000)); // 等待2秒
+    
+    // 示例：旋转2秒，逆时针，速度500us/step
+    stepper_rotate_time(signal->motor_control, 2000, false, 500);
+    vTaskDelay(pdMS_TO_TICKS(3000)); // 等待3秒
+    
+    // 示例：旋转到特定角度 (例如180度位置)
+    stepper_rotate_to_angle(signal->motor_control, 180.0f, 15.0f);
+    vTaskDelay(pdMS_TO_TICKS(2000)); // 等待2秒
+    
     while (1)
     {
-        vTaskDelay(pdMS_TO_TICKS(1));
+        // 每10秒执行一次示例动作
+        ESP_LOGI("MOTOR_CTRL", "Performing periodic rotation");
+        stepper_rotate_angle(signal->motor_control, 30, true, 5); // 旋转30度
+        vTaskDelay(pdMS_TO_TICKS(10000));
     }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
